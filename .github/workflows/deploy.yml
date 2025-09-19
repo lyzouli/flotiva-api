@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # ⚠️ Décommente si tes secrets sont dans un Environment nommé "production"
-    # environment: production
+    # environment: production.
 
     steps:
       - name: Checkout
