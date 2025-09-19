@@ -3,17 +3,31 @@ name: Deploy to Production
 on:
   push:
     branches: [ "main" ]
+  workflow_dispatch:
+
+# Évite les déploiements qui se chevauchent
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.SSH_KEY }}
+      - name: Pre-flight | Vérifier secrets
+        run: |
+          test -n "${{ secrets.SSH_HOST }}" || { echo "SSH_HOST manquant"; exit 1; }
+          test -n "${{ secrets.SSH_USER }}" || { echo "SSH_USER manquant"; exit 1; }
+          test -n "${{ secrets.SSH_PORT }}" || { echo "SSH_PORT manquant"; exit 1; }
+          test -n "${{ secrets.SSH_KEY }}"  || { echo "SSH_KEY manquant"; exit 1; }
+          test -n "${{ secrets.REMOTE_PATH }}" || { echo "REMOTE_PATH manquant"; exit 1; }
+          test -n "${{ secrets.PHP_CMD }}" || { echo "PHP_CMD manquant"; exit 1; }
+          test -n "${{ secrets.COMPOSER_BIN }}" || { echo "COMPOSER_BIN manquant"; exit 1; }
+          echo "✅ Secrets OK"
 
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -21,41 +35,55 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_KEY }}
+          script_stop: true
           script: |
-            set -e
+            set -euo pipefail
+
+            echo "➡️  CD vers dossier"
             cd ${{ secrets.REMOTE_PATH }}
 
-            # Bootstrap/MAJ code
+            echo "➡️  Bootstrap/FETCH code"
             if [ ! -d ".git" ]; then
               git init
-              git remote add origin git@github.com:lyzouli/flotiva-api.git
+              git remote add origin git@github.com:${{ github.repository }}.git
               git fetch origin main
               git checkout -t origin/main
             else
+              # S'assure que le serveur sait parler à GitHub via sa propre clé (id_flotiva_github)
               git fetch origin main
               git checkout main
               git reset --hard origin/main
             fi
 
-            # Dépendances prod
+            echo "➡️  Dépendances PROD (Composer)"
             ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-            # Nettoyage & cache
+            echo "➡️  Nettoyage caches"
             ${{ secrets.PHP_CMD }} artisan config:clear || true
             ${{ secrets.PHP_CMD }} artisan route:clear || true
             ${{ secrets.PHP_CMD }} artisan view:clear || true
 
+            echo "➡️  Rebuild caches"
             ${{ secrets.PHP_CMD }} artisan config:cache
             ${{ secrets.PHP_CMD }} artisan route:cache
             ${{ secrets.PHP_CMD }} artisan view:cache
 
-            # Migrations
+            echo "➡️  Migrations DB"
             ${{ secrets.PHP_CMD }} artisan migrate --force
 
-            # Liens & queues
+            echo "➡️  Storage symlink & queues"
             ${{ secrets.PHP_CMD }} artisan storage:link || true
             ${{ secrets.PHP_CMD }} artisan queue:restart || true
 
-            # Permissions
+            echo "➡️  Permissions"
             chgrp -R www-data storage bootstrap/cache || true
             chmod -R ug+rwx storage bootstrap/cache || true
+
+            echo "✅ Déploiement terminé"
+
+      # (Optionnel) Ping de santé, remplace l’URL par ton endpoint health si dispo
+      - name: Health check
+        run: |
+          echo "ℹ️  (Optionnel) Ajoute ici un curl vers /api/v1/health si souhaité"
+          # curl -I --max-time 10 https://api.flotiva.app/api/v1/health || exit 1
