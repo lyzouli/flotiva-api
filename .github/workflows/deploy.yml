@@ -46,18 +46,29 @@ jobs:
             ssh -T git@github.com || true
             GIT_SSH_COMMAND="ssh -v" git ls-remote git@github.com:${{ github.repository }}.git HEAD
 
-            echo "➡️  Récupération du code"
-            if [ ! -d ".git" ]; then
-              git init
-              git remote add origin git@github.com:${{ github.repository }}.git
-              git fetch origin main
-              git checkout -t origin/main
+            echo "➡️  Récupération du code (robuste)"
+            set -x
+            git --version
+            git remote -v || true
+            git status || true
+            git rev-parse --abbrev-ref HEAD || true
+
+            # S'assurer du remote SSH correct
+            if git remote get-url origin >/dev/null 2>&1; then
+              git remote set-url origin git@github.com:${{ github.repository }}.git
             else
-              git fetch origin main
-              git checkout main
-              git reset --hard origin/main
+              git remote add origin git@github.com:${{ github.repository }}.git
             fi
 
+            # Fetch (verbeux) + prune
+            GIT_SSH_COMMAND="ssh -v" git fetch --prune origin
+
+            # Créer/forcer la branche main à suivre origin/main
+            git checkout -B main origin/main
+
+            # Aligner le working tree sur la révision distante
+            git reset --hard origin/main
+            set +x
 
             echo "➡️  Dépendances (prod)"
             ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
