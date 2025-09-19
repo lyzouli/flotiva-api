@@ -42,6 +42,10 @@ jobs:
             echo "whoami=$(whoami)  pwd=$(pwd)"
             ls -la || true
 
+                        echo "➡️  Test accès GitHub depuis le serveur"
+            ssh -T git@github.com || true
+            GIT_SSH_COMMAND="ssh -v" git ls-remote git@github.com:${{ github.repository }}.git HEAD
+
             echo "➡️  Récupération du code"
             if [ ! -d ".git" ]; then
               git init
@@ -53,6 +57,7 @@ jobs:
               git checkout main
               git reset --hard origin/main
             fi
+
 
             echo "➡️  Dépendances (prod)"
             ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
