@@ -1,0 +1,61 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_KEY }}
+
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            set -e
+            cd ${{ secrets.REMOTE_PATH }}
+
+            # Bootstrap/MAJ code
+            if [ ! -d ".git" ]; then
+              git init
+              git remote add origin git@github.com:lyzouli/flotiva-api.git
+              git fetch origin main
+              git checkout -t origin/main
+            else
+              git fetch origin main
+              git checkout main
+              git reset --hard origin/main
+            fi
+
+            # Dépendances prod
+            ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+
+            # Nettoyage & cache
+            ${{ secrets.PHP_CMD }} artisan config:clear || true
+            ${{ secrets.PHP_CMD }} artisan route:clear || true
+            ${{ secrets.PHP_CMD }} artisan view:clear || true
+
+            ${{ secrets.PHP_CMD }} artisan config:cache
+            ${{ secrets.PHP_CMD }} artisan route:cache
+            ${{ secrets.PHP_CMD }} artisan view:cache
+
+            # Migrations
+            ${{ secrets.PHP_CMD }} artisan migrate --force
+
+            # Liens & queues
+            ${{ secrets.PHP_CMD }} artisan storage:link || true
+            ${{ secrets.PHP_CMD }} artisan queue:restart || true
+
+            # Permissions
+            chgrp -R www-data storage bootstrap/cache || true
+            chmod -R ug+rwx storage bootstrap/cache || true
