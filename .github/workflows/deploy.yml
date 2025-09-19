@@ -13,22 +13,24 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Si tu as mis tes secrets dans un Environment (ex: production), décommente la ligne ci-dessous
-    # environment: production
+    # environment: production  # ⇐ décommente si tes secrets sont dans un Environment
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Écrit la clé privée depuis le secret dans un fichier (en préservant les retours à la ligne)
-      - name: Prepare SSH key file
+      - name: Prepare SSH key file (no heredoc)
         id: keyfile
         shell: bash
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
         run: |
           set -euo pipefail
           KEY_PATH="$RUNNER_TEMP/gha_deploy_key"
           umask 177
-          cat > "$KEY_PATH" <<'KEY' ${{ secrets.SSH_KEY }} KEY
+          # Écrit la clé en préservant les retours à la ligne
+          printf '%s\n' "$SSH_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
           # Vérifie que la clé est valide
           ssh-keygen -lf "$KEY_PATH" || { echo "❌ SSH_KEY invalide"; exit 1; }
           echo "KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
