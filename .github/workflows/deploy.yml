@@ -13,34 +13,48 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # ⚠️ Décommente si tes secrets sont dans un Environment nommé "production"
-    # environment: production.
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Pre-flight | Vérifier secrets non vides
-        run: |
-          test -n "${{ secrets.SSH_HOST }}" || { echo "❌ SSH_HOST manquant"; exit 1; }
-          test -n "${{ secrets.SSH_USER }}" || { echo "❌ SSH_USER manquant"; exit 1; }
-          test -n "${{ secrets.SSH_PORT }}" || { echo "❌ SSH_PORT manquant"; exit 1; }
-          test -n "${{ secrets.SSH_KEY }}"  || { echo "❌ SSH_KEY manquant"; exit 1; }
-          test -n "${{ secrets.REMOTE_PATH }}" || { echo "❌ REMOTE_PATH manquant"; exit 1; }
-          test -n "${{ secrets.PHP_CMD }}" || { echo "❌ PHP_CMD manquant"; exit 1; }
-          test -n "${{ secrets.COMPOSER_BIN }}" || { echo "❌ COMPOSER_BIN manquant"; exit 1; }
-          echo "✅ Secrets OK"
-
-      - name: Prepare SSH key file
-        id: keyfile
-        shell: bash
+      - name: Pre-flight | Verify secrets
         env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_KEY: ${{ secrets.SSH_KEY }}
+          REMOTE_PATH: ${{ secrets.REMOTE_PATH }}
+          PHP_CMD: ${{ secrets.PHP_CMD }}
+          COMPOSER_BIN: ${{ secrets.COMPOSER_BIN }}
+        run: |
+          set -euo pipefail
+
+          missing=()
+          for var in SSH_HOST SSH_USER SSH_PORT SSH_KEY REMOTE_PATH PHP_CMD COMPOSER_BIN; do
+            if [ -z "${!var:-}" ]; then
+              missing+=("$var")
+            fi
+          done
+
+          if [ ${#missing[@]} -ne 0 ]; then
+            printf '❌ Missing secret(s): %s\n' "${missing[*]}"
+            exit 1
+          fi
+
+          echo "✅ Secrets look present"
+
+      - name: Prepare SSH key file (preserve newlines)
+        id: keyfile
         run: |
           set -euo pipefail
           KEY_PATH="$RUNNER_TEMP/gha_deploy_key"
-          printf "%s" "$SSH_KEY" > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
+          umask 177
+          cat >"$KEY_PATH" <<'EOF'
+${{ secrets.SSH_KEY }}
+EOF
+          # print fingerprint to confirm the key parsed OK
+          ssh-keygen -lf "$KEY_PATH" || { echo "❌ Invalid key format"; exit 1; }
           echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Deploy over SSH
@@ -49,15 +63,16 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key_path: ${{ steps.keyfile.outputs.key_path }}  # ✅ on passe par un fichier
+          key_path: ${{ steps.keyfile.outputs.key_path }}
           script_stop: true
+          debug: true
           script: |
             set -euo pipefail
 
-            echo "➡️  CD vers dossier"
+            echo "➡️  cd to project"
             cd ${{ secrets.REMOTE_PATH }}
 
-            echo "➡️  Bootstrap/FETCH code"
+            echo "➡️  Bootstrap/Fetch code"
             if [ ! -d ".git" ]; then
               git init
               git remote add origin git@github.com:${{ github.repository }}.git
@@ -69,10 +84,10 @@ jobs:
               git reset --hard origin/main
             fi
 
-            echo "➡️  Dépendances PROD (Composer)"
+            echo "➡️  Composer (prod)"
             ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-            echo "➡️  Nettoyage caches"
+            echo "➡️  Clear caches"
             ${{ secrets.PHP_CMD }} artisan config:clear || true
             ${{ secrets.PHP_CMD }} artisan route:clear || true
             ${{ secrets.PHP_CMD }} artisan view:clear || true
@@ -82,7 +97,7 @@ jobs:
             ${{ secrets.PHP_CMD }} artisan route:cache
             ${{ secrets.PHP_CMD }} artisan view:cache
 
-            echo "➡️  Migrations DB"
+            echo "➡️  Migrate DB"
             ${{ secrets.PHP_CMD }} artisan migrate --force
 
             echo "➡️  Storage & queues"
@@ -93,4 +108,4 @@ jobs:
             chgrp -R www-data storage bootstrap/cache || true
             chmod -R ug+rwx storage bootstrap/cache || true
 
-            echo "✅ Déploiement terminé"
+            echo "✅ Done"
