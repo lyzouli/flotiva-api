@@ -5,7 +5,6 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
-# Évite les déploiements qui se chevauchent
 concurrency:
   group: deploy-production
   cancel-in-progress: true
@@ -14,20 +13,35 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # ⚠️ Décommente si tes secrets sont dans un Environment nommé "production"
+    # environment: production
+
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Pre-flight | Vérifier secrets
+      - name: Pre-flight | Vérifier secrets non vides
         run: |
-          test -n "${{ secrets.SSH_HOST }}" || { echo "SSH_HOST manquant"; exit 1; }
-          test -n "${{ secrets.SSH_USER }}" || { echo "SSH_USER manquant"; exit 1; }
-          test -n "${{ secrets.SSH_PORT }}" || { echo "SSH_PORT manquant"; exit 1; }
-          test -n "${{ secrets.SSH_KEY }}"  || { echo "SSH_KEY manquant"; exit 1; }
-          test -n "${{ secrets.REMOTE_PATH }}" || { echo "REMOTE_PATH manquant"; exit 1; }
-          test -n "${{ secrets.PHP_CMD }}" || { echo "PHP_CMD manquant"; exit 1; }
-          test -n "${{ secrets.COMPOSER_BIN }}" || { echo "COMPOSER_BIN manquant"; exit 1; }
+          test -n "${{ secrets.SSH_HOST }}" || { echo "❌ SSH_HOST manquant"; exit 1; }
+          test -n "${{ secrets.SSH_USER }}" || { echo "❌ SSH_USER manquant"; exit 1; }
+          test -n "${{ secrets.SSH_PORT }}" || { echo "❌ SSH_PORT manquant"; exit 1; }
+          test -n "${{ secrets.SSH_KEY }}"  || { echo "❌ SSH_KEY manquant"; exit 1; }
+          test -n "${{ secrets.REMOTE_PATH }}" || { echo "❌ REMOTE_PATH manquant"; exit 1; }
+          test -n "${{ secrets.PHP_CMD }}" || { echo "❌ PHP_CMD manquant"; exit 1; }
+          test -n "${{ secrets.COMPOSER_BIN }}" || { echo "❌ COMPOSER_BIN manquant"; exit 1; }
           echo "✅ Secrets OK"
+
+      - name: Prepare SSH key file
+        id: keyfile
+        shell: bash
+        env:
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          set -euo pipefail
+          KEY_PATH="$RUNNER_TEMP/gha_deploy_key"
+          printf "%s" "$SSH_KEY" > "$KEY_PATH"
+          chmod 600 "$KEY_PATH"
+          echo "key_path=$KEY_PATH" >> "$GITHUB_OUTPUT"
 
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -35,7 +49,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key: ${{ secrets.SSH_KEY }}
+          key_path: ${{ steps.keyfile.outputs.key_path }}  # ✅ on passe par un fichier
           script_stop: true
           script: |
             set -euo pipefail
@@ -50,7 +64,6 @@ jobs:
               git fetch origin main
               git checkout -t origin/main
             else
-              # S'assure que le serveur sait parler à GitHub via sa propre clé (id_flotiva_github)
               git fetch origin main
               git checkout main
               git reset --hard origin/main
@@ -72,7 +85,7 @@ jobs:
             echo "➡️  Migrations DB"
             ${{ secrets.PHP_CMD }} artisan migrate --force
 
-            echo "➡️  Storage symlink & queues"
+            echo "➡️  Storage & queues"
             ${{ secrets.PHP_CMD }} artisan storage:link || true
             ${{ secrets.PHP_CMD }} artisan queue:restart || true
 
@@ -81,9 +94,3 @@ jobs:
             chmod -R ug+rwx storage bootstrap/cache || true
 
             echo "✅ Déploiement terminé"
-
-      # (Optionnel) Ping de santé, remplace l’URL par ton endpoint health si dispo
-      - name: Health check
-        run: |
-          echo "ℹ️  (Optionnel) Ajoute ici un curl vers /api/v1/health si souhaité"
-          # curl -I --max-time 10 https://api.flotiva.app/api/v1/health || exit 1
