@@ -13,27 +13,11 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # environment: production  # ⇐ décommente si tes secrets sont dans un Environment
+    # environment: production  # ⇐ décommente si tes SECRETS sont dans un Environment
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Prepare SSH key file (no heredoc)
-        id: keyfile
-        shell: bash
-        env:
-          SSH_KEY: ${{ secrets.SSH_KEY }}
-        run: |
-          set -euo pipefail
-          KEY_PATH="$RUNNER_TEMP/gha_deploy_key"
-          umask 177
-          # Écrit la clé en préservant les retours à la ligne
-          printf '%s\n' "$SSH_KEY" > "$KEY_PATH"
-          chmod 600 "$KEY_PATH"
-          # Vérifie que la clé est valide
-          ssh-keygen -lf "$KEY_PATH" || { echo "❌ SSH_KEY invalide"; exit 1; }
-          echo "KEY_PATH=$KEY_PATH" >> "$GITHUB_ENV"
 
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
@@ -41,7 +25,7 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key_path: ${{ env.KEY_PATH }}
+          key: ${{ secrets.SSH_KEY }}          # ✅ passer la clé PRIVÉE directement
           script_stop: true
           command_timeout: "20m"
           debug: true
