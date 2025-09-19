@@ -33,7 +33,7 @@ Route::prefix('/v1')->group(function () {
 
 
 Route::prefix('/v1')->group(function () {
-    Route::get('health', fn () => response()->json(['ok' => true]))->name('api.health');
+    Route::get('health', fn () => response()->json(['ook' => true]))->name('api.health');
 
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('me', MeController::class)->name('api.me');
