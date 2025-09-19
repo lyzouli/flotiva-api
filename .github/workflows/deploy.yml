@@ -13,7 +13,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # environment: production  # ⇐ décommente si tes SECRETS sont dans un Environment
 
     steps:
       - name: Checkout
@@ -25,15 +24,23 @@ jobs:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           port: ${{ secrets.SSH_PORT }}
-          key: ${{ secrets.SSH_KEY }}          # ✅ passer la clé PRIVÉE directement
+          key: ${{ secrets.SSH_KEY }}     # on passe la PRIVÉE directement
           script_stop: true
           command_timeout: "20m"
           debug: true
           script: |
             set -euo pipefail
 
+            REMOTE_PATH="${{ secrets.REMOTE_PATH }}"
+
+            echo "➡️  Vérif chemin distant"
+            echo "REMOTE_PATH='${REMOTE_PATH}'"
+            ls -ld -- "${REMOTE_PATH}" || true
+
             echo "➡️  Aller dans le dossier"
-            cd ${{ secrets.REMOTE_PATH }}
+            cd -- "${REMOTE_PATH}" || { echo "❌ cd a échoué"; exit 1; }
+            echo "whoami=$(whoami)  pwd=$(pwd)"
+            ls -la || true
 
             echo "➡️  Récupération du code"
             if [ ! -d ".git" ]; then
