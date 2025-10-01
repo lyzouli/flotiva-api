@@ -2,8 +2,8 @@ name: Deploy to Production
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch:
+    branches: ["main"]        # déploie à chaque push sur main
+  workflow_dispatch:          # et déclenchement manuel possible
 
 concurrency:
   group: deploy-production
@@ -15,83 +15,109 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout (for metadata only)
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
 
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          port: ${{ secrets.SSH_PORT }}
-          key: ${{ secrets.SSH_KEY }}     # on passe la PRIVÉE directement
+          host: ${{ secrets.SSH_HOST }}        # ex: 203.0.113.10
+          username: ${{ secrets.SSH_USER }}    # ex: deploy (recommandé)
+          port: ${{ secrets.SSH_PORT }}        # ex: 22
+          key: ${{ secrets.SSH_KEY }}          # clé PRIVÉE OpenSSH correspondant à authorized_keys du serveur
           script_stop: true
           command_timeout: "20m"
           debug: true
+          envs: |
+            REMOTE_PATH=${{ secrets.REMOTE_PATH }}
+            PHP_CMD=${{ secrets.PHP_CMD }}
+            COMPOSER_BIN=${{ secrets.COMPOSER_BIN }}
+            GIT_BRANCH=${{ secrets.GIT_BRANCH }}
+            PHP_FPM_SERVICE=${{ secrets.PHP_FPM_SERVICE }}
           script: |
             set -euo pipefail
+            umask 002
 
-            REMOTE_PATH="${{ secrets.REMOTE_PATH }}"
+            # ---------- Config & defaults ----------
+            : "${REMOTE_PATH:?REMOTE_PATH secret requis}"
+            PHP_CMD="${PHP_CMD:-php}"
+            COMPOSER_BIN="${COMPOSER_BIN:-composer}"
+            GIT_BRANCH="${GIT_BRANCH:-main}"
+            PHP_FPM_SERVICE="${PHP_FPM_SERVICE:-php8.3-fpm}"
 
-            echo "➡️  Vérif chemin distant"
-            echo "REMOTE_PATH='${REMOTE_PATH}'"
-            ls -ld -- "${REMOTE_PATH}" || true
+            echo "➡️  Cibles:"
+            echo "  - path:  ${REMOTE_PATH}"
+            echo "  - php:   ${PHP_CMD}"
+            echo "  - comp:  ${COMPOSER_BIN}"
+            echo "  - branch:${GIT_BRANCH}"
+            echo "  - fpm:   ${PHP_FPM_SERVICE}"
 
-            echo "➡️  Aller dans le dossier"
-            cd -- "${REMOTE_PATH}" || { echo "❌ cd a échoué"; exit 1; }
-            echo "whoami=$(whoami)  pwd=$(pwd)"
-            ls -la || true
+            # ---------- Préparation Git ----------
+            cd -- "${REMOTE_PATH}"
+            echo "➡️  whoami=$(whoami)  pwd=$(pwd)"
 
-                        echo "➡️  Test accès GitHub depuis le serveur"
-            ssh -T git@github.com || true
-            GIT_SSH_COMMAND="ssh -v" git ls-remote git@github.com:${{ github.repository }}.git HEAD
+            # Prévenir les warnings 'dubious ownership'
+            git config --global --add safe.directory "${REMOTE_PATH}" || true
 
-            echo "➡️  Récupération du code (robuste)"
-            set -x
-            git --version
-            git remote -v || true
-            git status || true
-            git rev-parse --abbrev-ref HEAD || true
-
-            # S'assurer du remote SSH correct
-            if git remote get-url origin >/dev/null 2>&1; then
-              git remote set-url origin git@github.com:${{ github.repository }}.git
-            else
-              git remote add origin git@github.com:${{ github.repository }}.git
+            # Éviter prompt host-key pour github.com (si le home du user est vierge)
+            mkdir -p ~/.ssh
+            chmod 700 ~/.ssh
+            if ! grep -q "github.com" ~/.ssh/known_hosts 2>/dev/null; then
+              ssh-keyscan -H github.com >> ~/.ssh/known_hosts 2>/dev/null || true
             fi
+            chmod 600 ~/.ssh/known_hosts || true
 
-            # Fetch (verbeux) + prune
-            GIT_SSH_COMMAND="ssh -v" git fetch --prune origin
-
-            # Créer/forcer la branche main à suivre origin/main
-            git checkout -B main origin/main
-
-            # Aligner le working tree sur la révision distante
-            git reset --hard origin/main
+            echo "➡️  Fetch/reset sur ${GIT_BRANCH}"
+            set -x
+            git fetch --prune origin
+            git checkout -B "${GIT_BRANCH}" "origin/${GIT_BRANCH}"
+            git reset --hard "origin/${GIT_BRANCH}"
             set +x
 
-            echo "➡️  Dépendances (prod)"
-            ${{ secrets.COMPOSER_BIN }} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
+            # ---------- Maintenance ON ----------
+            echo "➡️  Maintenance ON"
+            ${PHP_CMD} artisan down --render="errors::503" || true
 
-            echo "➡️  Nettoyage caches"
-            ${{ secrets.PHP_CMD }} artisan config:clear || true
-            ${{ secrets.PHP_CMD }} artisan route:clear || true
-            ${{ secrets.PHP_CMD }} artisan view:clear || true
+            # ---------- Composer install ----------
+            # IMPORTANT: on installe selon composer.lock (commit le lock !)
+            echo "➡️  Composer install (prod)"
+            ${COMPOSER_BIN} install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
-            echo "➡️  Reconstruction caches"
-            ${{ secrets.PHP_CMD }} artisan config:cache
-            ${{ secrets.PHP_CMD }} artisan route:cache
-            ${{ secrets.PHP_CMD }} artisan view:cache
+            # ---------- Migrations DB ----------
+            echo "➡️  Migrate --force"
+            ${PHP_CMD} artisan migrate --force
 
-            echo "➡️  Migrations"
-            ${{ secrets.PHP_CMD }} artisan migrate --force
+            # ---------- Caches ----------
+            echo "➡️  Clear caches"
+            ${PHP_CMD} artisan config:clear || true
+            ${PHP_CMD} artisan route:clear  || true
+            ${PHP_CMD} artisan view:clear   || true
 
-            echo "➡️  Liens & queues"
-            ${{ secrets.PHP_CMD }} artisan storage:link || true
-            ${{ secrets.PHP_CMD }} artisan queue:restart || true
+            echo "➡️  Rebuild caches"
+            ${PHP_CMD} artisan config:cache
+            ${PHP_CMD} artisan route:cache
+            ${PHP_CMD} artisan view:cache
 
-            echo "➡️  Permissions"
+            # ---------- Liens & queues ----------
+            echo "➡️  Storage link & queues"
+            ${PHP_CMD} artisan storage:link    || true
+            ${PHP_CMD} artisan queue:restart   || true
+            ${PHP_CMD} artisan horizon:terminate || true  # si Horizon est utilisé
+
+            # ---------- Permissions ----------
+            echo "➡️  Fix permissions"
+            mkdir -p storage/framework/{cache,views,sessions}
             chgrp -R www-data storage bootstrap/cache || true
-            chmod -R ug+rwx storage bootstrap/cache || true
+            chmod -R ug+rwx storage bootstrap/cache   || true
+
+            # ---------- Maintenance OFF ----------
+            echo "➡️  Maintenance OFF"
+            ${PHP_CMD} artisan up
+
+            # ---------- Reload FPM ----------
+            echo "➡️  Reload PHP-FPM"
+            sudo systemctl reload "${PHP_FPM_SERVICE}" || true
 
             echo "✅ Déploiement terminé"
