@@ -6,6 +6,7 @@ use App\Http\Requests\Auth\RegisterRequest;
 use App\Services\Auth\RegisterAccountService;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Auth;
 
 class RegisteredUserController extends Controller
 {
@@ -21,6 +22,9 @@ class RegisteredUserController extends Controller
         );
 
         event(new Registered($user)); // envoie l’email de vérif
+
+        Auth::guard('web')->login($user);
+        $request->session()->regenerate();
 
         // Token pratique pour mobile/tests (PAT)
         $token = $user->createToken('bootstrap')->plainTextToken;

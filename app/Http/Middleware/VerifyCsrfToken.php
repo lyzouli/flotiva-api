@@ -11,10 +11,7 @@ class VerifyCsrfToken extends Middleware
      * Tu peux laisser ça définitivement si tu veux éviter la friction SPA.
      */
     protected $except = [
-        'v1/auth/login',
-        'v1/auth/logout',
-        'v1/auth/register',
-        'v1/auth/forgot-password',
-        'v1/auth/reset-password',
+        'v1/auth/*',
+        'api/v1/auth/*',
     ];
 }

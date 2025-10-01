@@ -158,7 +158,7 @@ return [
     |
     */
 
-    'domain' => env('SESSION_DOMAIN', '.flotiva.app'),
+    'domain' => env('SESSION_DOMAIN', env('APP_URL') ? parse_url(env('APP_URL'), PHP_URL_HOST) : null),
 
     /*
     |--------------------------------------------------------------------------
@@ -171,7 +171,7 @@ return [
     |
     */
 
-    'secure' => env('SESSION_SECURE_COOKIE', true),
+    'secure' => env('SESSION_SECURE_COOKIE', false),
 
     /*
     |--------------------------------------------------------------------------
@@ -202,7 +202,7 @@ return [
     */
 
     //'same_site' => env('SESSION_SAME_SITE', 'lax'),
-    'same_site' => 'none',
+    'same_site' => env('SESSION_SAME_SITE', null),
 
     /*
     |--------------------------------------------------------------------------
